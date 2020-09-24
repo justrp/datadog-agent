@@ -69,6 +69,7 @@ type Server struct {
 
 	packetsIn                 chan listeners.Packets
 	sharedPacketPool          *listeners.PacketPool
+	sharedFloat64List         *float64ListPool
 	Statistics                *util.Stats
 	Started                   bool
 	stopChan                  chan bool
@@ -206,6 +207,7 @@ func NewServer(aggregator *aggregator.BufferedAggregator) (*Server, error) {
 		Statistics:                stats,
 		packetsIn:                 packetsChannel,
 		sharedPacketPool:          sharedPacketPool,
+		sharedFloat64List:         newFloat64ListPool(),
 		aggregator:                aggregator,
 		listeners:                 tmpListeners,
 		stopChan:                  make(chan bool),
@@ -324,7 +326,7 @@ func (s *Server) worker() {
 	// the flushing logic to the aggregator is actually in the batcher.
 	batcher := newBatcher(s.aggregator)
 
-	parser := newParser()
+	parser := newParser(s.sharedFloat64List)
 	for {
 		select {
 		case <-s.stopChan:
@@ -393,7 +395,7 @@ func (s *Server) parsePackets(batcher *batcher, parser *parser, packets []*liste
 				}
 				batcher.appendEvent(event)
 			case metricSampleType:
-				sample, err := s.parseMetricMessage(parser, message, originTagger.getTags)
+				samples, err := s.parseMetricMessage(parser, message, originTagger.getTags)
 				if err != nil {
 					originTags := originTagger.getTags()
 					if len(originTags) > 0 {
@@ -403,15 +405,17 @@ func (s *Server) parsePackets(batcher *batcher, parser *parser, packets []*liste
 					}
 					continue
 				}
-				if atomic.LoadUint64(&s.Debug.Enabled) == 1 {
-					s.storeMetricStats(sample)
-				}
-				batcher.appendSample(sample)
-				if s.histToDist && sample.Mtype == metrics.HistogramType {
-					distSample := sample.Copy()
-					distSample.Name = s.histToDistPrefix + distSample.Name
-					distSample.Mtype = metrics.DistributionType
-					batcher.appendSample(*distSample)
+				for idx := range samples {
+					if atomic.LoadUint64(&s.Debug.Enabled) == 1 {
+						s.storeMetricStats(samples[idx])
+					}
+					batcher.appendSample(samples[idx])
+					if s.histToDist && samples[idx].Mtype == metrics.HistogramType {
+						distSample := samples[idx].Copy()
+						distSample.Name = s.histToDistPrefix + distSample.Name
+						distSample.Mtype = metrics.DistributionType
+						batcher.appendSample(*distSample)
+					}
 				}
 			}
 		}
@@ -428,12 +432,12 @@ func (s *Server) errLog(format string, params ...interface{}) {
 	}
 }
 
-func (s *Server) parseMetricMessage(parser *parser, message []byte, originTagsFunc func() []string) (metrics.MetricSample, error) {
+func (s *Server) parseMetricMessage(parser *parser, message []byte, originTagsFunc func() []string) ([]metrics.MetricSample, error) {
 	sample, err := parser.parseMetricSample(message)
 	if err != nil {
 		dogstatsdMetricParseErrors.Add(1)
 		tlmProcessed.IncWithTags(tlmProcessedErrorTags)
-		return metrics.MetricSample{}, err
+		return nil, err
 	}
 	if s.mapper != nil {
 		mapResult := s.mapper.Map(sample.name)
@@ -443,11 +447,16 @@ func (s *Server) parseMetricMessage(parser *parser, message []byte, originTagsFu
 			sample.tags = append(sample.tags, mapResult.Tags...)
 		}
 	}
-	metricSample := enrichMetricSample(sample, s.metricPrefix, s.metricPrefixBlacklist, s.defaultHostname, originTagsFunc, s.entityIDPrecedenceEnabled)
-	metricSample.Tags = append(metricSample.Tags, s.extraTags...)
-	dogstatsdMetricPackets.Add(1)
-	tlmProcessed.IncWithTags(tlmProcessedOkTags)
-	return metricSample, nil
+	metricSamples := enrichMetricSample(sample, s.metricPrefix, s.metricPrefixBlacklist, s.defaultHostname, originTagsFunc, s.entityIDPrecedenceEnabled)
+	if len(sample.values) > 0 {
+		s.sharedFloat64List.put(sample.values)
+	}
+	for idx := range metricSamples {
+		metricSamples[idx].Tags = append(metricSamples[idx].Tags, s.extraTags...)
+		dogstatsdMetricPackets.Add(1)
+		tlmProcessed.IncWithTags(tlmProcessedOkTags)
+	}
+	return metricSamples, nil
 }
 
 func (s *Server) parseEventMessage(parser *parser, message []byte, originTagsFunc func() []string) (*metrics.Event, error) {

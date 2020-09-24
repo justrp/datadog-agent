@@ -32,7 +32,7 @@ func TestIdentifyRandomString(t *testing.T) {
 }
 
 func TestParseTags(t *testing.T) {
-	parser := newParser()
+	parser := newParser(newFloat64ListPool())
 	rawTags := []byte("tag:test,mytag,good:boy")
 	tags := parser.parseTags(rawTags)
 	expectedTags := []string{"tag:test", "mytag", "good:boy"}
@@ -40,7 +40,7 @@ func TestParseTags(t *testing.T) {
 }
 
 func TestParseTagsEmpty(t *testing.T) {
-	parser := newParser()
+	parser := newParser(newFloat64ListPool())
 	rawTags := []byte("")
 	tags := parser.parseTags(rawTags)
 	assert.Nil(t, tags)
@@ -55,6 +55,38 @@ func TestUnsafeParseFloat(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, unsafeFloat, float)
+}
+
+func TestUnsafeParseFloatList(t *testing.T) {
+	unsafeFloats, err := parseFloat64List([]byte("1.1234:21.5:13"), []float64{})
+	assert.NoError(t, err)
+	assert.Len(t, unsafeFloats, 3)
+	assert.Equal(t, unsafeFloats, []float64{1.1234, 21.5, 13})
+
+	unsafeFloats, err = parseFloat64List([]byte("1.1234"), []float64{})
+	assert.NoError(t, err)
+	assert.Len(t, unsafeFloats, 1)
+	assert.Equal(t, unsafeFloats, []float64{1.1234})
+
+	unsafeFloats, err = parseFloat64List([]byte("1.1234:41:"), []float64{})
+	assert.NoError(t, err)
+	assert.Len(t, unsafeFloats, 2)
+	assert.Equal(t, unsafeFloats, []float64{1.1234, 41})
+
+	unsafeFloats, err = parseFloat64List([]byte("1.1234::41"), []float64{})
+	assert.NoError(t, err)
+	assert.Len(t, unsafeFloats, 2)
+
+	assert.Equal(t, unsafeFloats, []float64{1.1234, 41})
+
+	unsafeFloats, err = parseFloat64List([]byte(":1.1234::41"), []float64{})
+	assert.NoError(t, err)
+	assert.Len(t, unsafeFloats, 2)
+	assert.Equal(t, unsafeFloats, []float64{1.1234, 41})
+
+	_, err = parseFloat64List([]byte(""), []float64{})
+	assert.Error(t, err)
+	assert.Equal(t, err.Error(), "no value found")
 }
 
 func TestUnsafeParseInt(t *testing.T) {

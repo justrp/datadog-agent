@@ -28,8 +28,12 @@ func mockAggregator() *aggregator.BufferedAggregator {
 	return agg
 }
 
-func buildPacketConent(numberOfMetrics int) []byte {
-	rawPacket := "daemon:666|h|@0.5|#sometag1:somevalue1,sometag2:somevalue2"
+func buildPacketConent(numberOfMetrics int, nbValuePerMessage int) []byte {
+	values := ""
+	for i := 0; i < nbValuePerMessage; i++ {
+		values += ":666"
+	}
+	rawPacket := "daemon" + values + "|h|@0.5|#sometag1:somevalue1,sometag2:somevalue2"
 	packets := rawPacket
 	for i := 1; i < numberOfMetrics; i++ {
 		packets += "\n" + rawPacket
@@ -37,7 +41,7 @@ func buildPacketConent(numberOfMetrics int) []byte {
 	return []byte(packets)
 }
 
-func BenchmarkParsePackets(b *testing.B) {
+func benchParsePackets(b *testing.B, nbMessage int, nbValuePerMessage int) {
 	// our logger will log dogstatsd packet by default if nothing is setup
 	config.SetupLogger("", "off", "", "", false, true, false)
 
@@ -60,9 +64,8 @@ func BenchmarkParsePackets(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		batcher := newBatcher(agg)
-		parser := newParser()
-		// 32 packets of 20 samples
-		rawPacket := buildPacketConent(20 * 32)
+		parser := newParser(newFloat64ListPool())
+		rawPacket := buildPacketConent(nbMessage, nbValuePerMessage)
 		packet := listeners.Packet{
 			Contents: rawPacket,
 			Origin:   listeners.NoOrigin,
@@ -74,6 +77,16 @@ func BenchmarkParsePackets(b *testing.B) {
 			s.parsePackets(batcher, parser, packets)
 		}
 	})
+}
+
+func BenchmarkParsePackets(b *testing.B) {
+	// 640 packets of 1 samples
+	benchParsePackets(b, 20*32, 1)
+}
+
+func BenchmarkParsePacketsMultiple(b *testing.B) {
+	// 64 packets of 10 samples
+	benchParsePackets(b, 64, 10)
 }
 
 func BenchmarkWithMapper(b *testing.B) {
@@ -125,7 +138,7 @@ func BenchmarkMapperControl(b *testing.B) {
 	defer close(done)
 
 	batcher := newBatcher(agg)
-	parser := newParser()
+	parser := newParser(newFloat64ListPool())
 
 	for n := 0; n < b.N; n++ {
 		packet := listeners.Packet{

@@ -1,0 +1,7 @@
+---
+features:
+  - |
+    Adding support for multiple values per dogstatsd datagram. Numerical
+    metrics (ie: not 'set') in dogstatsd now support sending multiple values per
+    message. This allows client to reduce traffic usage and enable client side
+    aggregation for histogram and distribution.

@@ -184,6 +184,53 @@ func TestUDPReceive(t *testing.T) {
 		assert.FailNow(t, "Timeout on receive channel")
 	}
 
+	// multi-value packet
+	conn.Write([]byte("daemon1:666:123|c\ndaemon2:1000|c"))
+	select {
+	case res := <-metricOut:
+		assert.Equal(t, 3, len(res))
+		sample1 := res[0]
+		assert.NotNil(t, sample1)
+		assert.Equal(t, sample1.Name, "daemon1")
+		assert.EqualValues(t, sample1.Value, 666.0)
+		assert.Equal(t, sample1.Mtype, metrics.CounterType)
+		sample2 := res[1]
+		assert.NotNil(t, sample2)
+		assert.Equal(t, sample2.Name, "daemon1")
+		assert.EqualValues(t, sample2.Value, 123.0)
+		assert.Equal(t, sample2.Mtype, metrics.CounterType)
+		sample3 := res[2]
+		assert.NotNil(t, sample3)
+		assert.Equal(t, sample3.Name, "daemon2")
+		assert.EqualValues(t, sample3.Value, 1000.0)
+		assert.Equal(t, sample3.Mtype, metrics.CounterType)
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "Timeout on receive channel")
+	}
+
+	// multi-value packet with skip empty
+	conn.Write([]byte("daemon1::666::123::::|c\ndaemon2:1000|c"))
+	select {
+	case res := <-metricOut:
+		assert.Equal(t, 3, len(res))
+		sample1 := res[0]
+		assert.NotNil(t, sample1)
+		assert.Equal(t, sample1.Name, "daemon1")
+		assert.EqualValues(t, sample1.Value, 666.0)
+		assert.Equal(t, sample1.Mtype, metrics.CounterType)
+		sample2 := res[1]
+		assert.NotNil(t, sample2)
+		assert.Equal(t, sample2.Name, "daemon1")
+		assert.EqualValues(t, sample2.Value, 123.0)
+		assert.Equal(t, sample2.Mtype, metrics.CounterType)
+		sample3 := res[2]
+		assert.NotNil(t, sample3)
+		assert.Equal(t, sample3.Name, "daemon2")
+		assert.EqualValues(t, sample3.Value, 1000.0)
+		assert.Equal(t, sample3.Mtype, metrics.CounterType)
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "Timeout on receive channel")
+	}
 	// slightly malformed multi-metric packet, should still be parsed in whole
 	conn.Write([]byte("daemon1:666|c\n\ndaemon2:1000|c\n"))
 	select {
@@ -204,7 +251,20 @@ func TestUDPReceive(t *testing.T) {
 	}
 
 	// Test erroneous metric
-	conn.Write([]byte("daemon1:666:777|g\ndaemon2:666|g|#sometag1:somevalue1,sometag2:somevalue2"))
+	conn.Write([]byte("daemon1:666a|g\ndaemon2:666|g|#sometag1:somevalue1,sometag2:somevalue2"))
+	select {
+	case res := <-metricOut:
+		assert.Equal(t, 1, len(res))
+		sample := res[0]
+
+		assert.NotNil(t, sample)
+		assert.Equal(t, sample.Name, "daemon2")
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "Timeout on receive channel")
+	}
+
+	// Test empty metric
+	conn.Write([]byte("daemon1:|g\ndaemon2:666|g|#sometag1:somevalue1,sometag2:somevalue2\ndaemon3: :1:|g"))
 	select {
 	case res := <-metricOut:
 		assert.Equal(t, 1, len(res))
@@ -512,7 +572,7 @@ func TestNoMappingsConfig(t *testing.T) {
 
 	assert.Nil(t, s.mapper)
 
-	parser := newParser()
+	parser := newParser(newFloat64ListPool())
 	_, err = s.parseMetricMessage(parser, []byte("test.metric:666|g"), getOriginTags)
 	assert.NoError(t, err)
 }
@@ -625,10 +685,12 @@ dogstatsd_mapper_profiles:
 
 			var actualSamples []MetricSample
 			for _, p := range scenario.packets {
-				parser := newParser()
-				sample, err := s.parseMetricMessage(parser, []byte(p), getOriginTags)
+				parser := newParser(newFloat64ListPool())
+				samples, err := s.parseMetricMessage(parser, []byte(p), getOriginTags)
 				assert.NoError(t, err, "Case `%s` failed. parseMetricMessage should not return error %v", err)
-				actualSamples = append(actualSamples, MetricSample{Name: sample.Name, Tags: sample.Tags, Mtype: sample.Mtype, Value: sample.Value})
+				for _, sample := range samples {
+					actualSamples = append(actualSamples, MetricSample{Name: sample.Name, Tags: sample.Tags, Mtype: sample.Mtype, Value: sample.Value})
+				}
 			}
 			for _, sample := range scenario.expectedSamples {
 				sort.Strings(sample.Tags)

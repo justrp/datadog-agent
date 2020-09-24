@@ -104,7 +104,7 @@ func isBlacklisted(metricName, namespace string, namespaceBlacklist []string) bo
 	return false
 }
 
-func enrichMetricSample(metricSample dogstatsdMetricSample, namespace string, namespaceBlacklist []string, defaultHostname string, originTagsFunc func() []string, entityIDPrecedenceEnabled bool) metrics.MetricSample {
+func enrichMetricSample(metricSample dogstatsdMetricSample, namespace string, namespaceBlacklist []string, defaultHostname string, originTagsFunc func() []string, entityIDPrecedenceEnabled bool) []metrics.MetricSample {
 	metricName := metricSample.name
 	tags, hostname := enrichTags(metricSample.tags, defaultHostname, originTagsFunc, entityIDPrecedenceEnabled)
 
@@ -112,15 +112,35 @@ func enrichMetricSample(metricSample dogstatsdMetricSample, namespace string, na
 		metricName = namespace + metricName
 	}
 
-	return metrics.MetricSample{
+	mtype := enrichMetricType(metricSample.metricType)
+
+	// non set type
+	if len(metricSample.values) > 0 {
+		samples := []metrics.MetricSample{}
+		for idx := range metricSample.values {
+			samples = append(samples,
+				metrics.MetricSample{
+					Host:       hostname,
+					Name:       metricName,
+					Tags:       tags,
+					Mtype:      mtype,
+					Value:      metricSample.values[idx],
+					SampleRate: metricSample.sampleRate,
+					RawValue:   metricSample.setValue,
+				})
+		}
+		return samples
+	}
+
+	return []metrics.MetricSample{{
 		Host:       hostname,
 		Name:       metricName,
 		Tags:       tags,
-		Mtype:      enrichMetricType(metricSample.metricType),
-		Value:      metricSample.value,
+		Mtype:      mtype,
+		Value:      0,
 		SampleRate: metricSample.sampleRate,
 		RawValue:   metricSample.setValue,
-	}
+	}}
 }
 
 func enrichEventPriority(priority eventPriority) metrics.EventPriority {
