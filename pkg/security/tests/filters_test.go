@@ -20,7 +20,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func openTestFile(test *testProbe, filename string, flags int) (int, string, error) {
+func openTestFile(test *testModule, filename string, flags int) (int, string, error) {
 	testFile, testFilePtr, err := test.Path(filename)
 	if err != nil {
 		return 0, "", err
@@ -40,14 +40,14 @@ func openTestFile(test *testProbe, filename string, flags int) (int, string, err
 	return int(fd), testFile, nil
 }
 
-func waitForOpenEvent(test *testProbe, filename string) (*probe.Event, error) {
+func waitForOpenEvent(test *testModule, filename string) (*probe.Event, error) {
 	timeout := time.After(3 * time.Second)
 	exhaust := time.After(time.Second)
 
 	var event *probe.Event
 	for {
 		select {
-		case e := <-test.events:
+		case e := <-test.probeHandler.events:
 			if value, _ := e.GetFieldValue("open.filename"); value == filename {
 				event = e
 			}
@@ -62,16 +62,15 @@ func waitForOpenEvent(test *testProbe, filename string) (*probe.Event, error) {
 	}
 }
 
-func waitForOpenDiscarder(test *testProbe, filename string) (*probe.Event, error) {
+func waitForOpenDiscarder(test *testModule, filename string) (*probe.Event, error) {
 	timeout := time.After(5 * time.Second)
 	exhaust := time.After(time.Second)
 
 	var event *probe.Event
 	for {
 		select {
-		case <-test.events:
+		case <-test.probeHandler.events:
 		case discarder := <-test.discarders:
-			test.probe.OnNewDiscarder(test.rs, discarder.event.(*sprobe.Event), discarder.field, discarder.eventType)
 			if value, _ := discarder.event.GetFieldValue("open.filename"); value == filename {
 				event = discarder.event.(*sprobe.Event)
 			}
@@ -91,7 +90,7 @@ func TestOpenBasenameApproverFilter(t *testing.T) {
 		Expression: `open.filename == "{{.Root}}/test-oba-1"`,
 	}
 
-	test, err := newTestProbe(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{wantProbeEvents: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +125,7 @@ func TestOpenParentDiscarderFilter(t *testing.T) {
 		Expression: `open.filename =~ "/usr/bin" && open.flags & (O_CREAT | O_SYNC) > 0`,
 	}
 
-	test, err := newTestProbe(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{wantProbeEvents: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +160,7 @@ func TestOpenFlagsApproverFilter(t *testing.T) {
 		Expression: `open.flags & (O_SYNC | O_NOCTTY) > 0`,
 	}
 
-	test, err := newTestProbe(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{wantProbeEvents: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +204,7 @@ func TestOpenProcessPidDiscarder(t *testing.T) {
 		Expression: `open.filename =="{{.Root}}/test-oba-1" && process.filename == "/bin/cat"`,
 	}
 
-	test, err := newTestProbe(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{wantProbeEvents: true})
 	if err != nil {
 		t.Fatal(err)
 	}

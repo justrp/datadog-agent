@@ -23,7 +23,7 @@ func TestDentryRename(t *testing.T) {
 		Expression: `rename.old.filename in ["{{.Root}}/test-rename", "{{.Root}}/test2-rename"]`,
 	}
 
-	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestDentryRenameFolder(t *testing.T) {
 		Expression: `open.basename == "test-rename" && (open.flags & O_CREAT) > 0`,
 	}
 
-	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestDentryUnlink(t *testing.T) {
 		Expression: `unlink.filename =~ "{{.Root}}/test-unlink-*"`,
 	}
 
-	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestDentryRmdir(t *testing.T) {
 		Expression: `rmdir.filename =~ "{{.Root}}/test-rmdir-*"`,
 	}
 
-	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{enableFilters: true})
+	test, err := newTestModule(nil, []*rules.RuleDefinition{rule}, testOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}

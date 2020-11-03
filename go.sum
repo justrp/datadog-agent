@@ -94,8 +94,8 @@ github.com/DataDog/datadog-go v3.5.0+incompatible h1:AShr9cqkF+taHjyQgcBcQUt/ZNK
 github.com/DataDog/datadog-go v3.5.0+incompatible/go.mod h1:LButxg5PwREeZtORoXG3tL4fMGNddJ+vMq1mwgfaqoQ=
 github.com/DataDog/datadog-operator v0.2.1-0.20200709152311-9c71245c6822 h1:E5WNl43j4mpE3V35QySkRnP/m9pjXOnEZD6eyTK7Qvk=
 github.com/DataDog/datadog-operator v0.2.1-0.20200709152311-9c71245c6822/go.mod h1:a5NqgPglcSct+NwO9gPvVhoL5V6G1+gHbRaRnU8U54M=
-github.com/DataDog/ebpf v0.0.0-20201015152207-a91a2d800994 h1:dbl6KbfE4EGBoTV/c1lhshLCAQbYP34vSHkU3zX8QRY=
-github.com/DataDog/ebpf v0.0.0-20201015152207-a91a2d800994/go.mod h1:rIVS3jqxhqtYJtznvFI8qtCbYG1M7WQZS4Z15/nCmOI=
+github.com/DataDog/ebpf v0.0.0-20201110110530-cca951321a78 h1:X48zSE9mm+0/i4FY7LOjrTGp2601S9hVdmXYly+lsas=
+github.com/DataDog/ebpf v0.0.0-20201110110530-cca951321a78/go.mod h1:rIVS3jqxhqtYJtznvFI8qtCbYG1M7WQZS4Z15/nCmOI=
 github.com/DataDog/gobpf v0.0.0-20200907093925-5f8313cb4d71 h1:0TOAH3X9tEvMBVQ1HYrQfrnAUcSS1mfMrhqeN+spV1s=
 github.com/DataDog/gobpf v0.0.0-20200907093925-5f8313cb4d71/go.mod h1:rNvi5cSHdpxN6495MOYAWN3yukac8lORoluL+9Osrsw=
 github.com/DataDog/gohai v0.0.0-20200605003749-e17d616e422a h1:BkU6uq4Ib7Kp1zP7MT33IdHZQazC+kxbuTyEmgePyyA=
@@ -607,6 +607,7 @@ github.com/google/gofuzz v1.0.0 h1:A8PeW59pxE9IoFRqBp37U+mSNaQoZ46F1f0f863XSXw=
 github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
 github.com/google/gopacket v1.1.17 h1:rMrlX2ZY2UbvT+sdz3+6J+pp2z+msCq9MxTU6ymxbBY=
 github.com/google/gopacket v1.1.17/go.mod h1:UdDNZ1OO62aGYVnPhxT1U6aI7ukYtA/kB8vaU0diBUM=
+github.com/google/martian v2.1.0+incompatible h1:/CP5g8u/VJHijgedC/Legn3BAbAaWPgecwXBIDzw5no=
 github.com/google/martian v2.1.0+incompatible/go.mod h1:9I4somxYTbIHy5NJKHRl3wXiIaQGbYVAs8BPL6v8lEs=
 github.com/google/pprof v0.0.0-20181206194817-3ea8567a2e57/go.mod h1:zfwlbNMJ+OItoe0UupaVj+oy1omPYYDuagoSzA8v9mc=
 github.com/google/pprof v0.0.0-20190515194954-54271f7e092f/go.mod h1:zfwlbNMJ+OItoe0UupaVj+oy1omPYYDuagoSzA8v9mc=
@@ -946,6 +947,7 @@ github.com/mitchellh/go-wordwrap v0.0.0-20150314170334-ad45545899c7/go.mod h1:ZX
 github.com/mitchellh/go-wordwrap v1.0.0/go.mod h1:ZXFpozHsX6DPmq2I0TCekCxypsnAUbP2oI0UX1GXzOo=
 github.com/mitchellh/gox v0.4.0/go.mod h1:Sd9lOJ0+aimLBi73mGofS1ycjY8lL3uZM3JPS42BGNg=
 github.com/mitchellh/hashstructure v0.0.0-20170609045927-2bca23e0e452/go.mod h1:QjSHrPWS+BGUVBYkbTZWEnOh3G1DutKwClXU/ABz6AQ=
+github.com/mitchellh/hashstructure v1.0.0 h1:ZkRJX1CyOoTkar7p/mLS5TZU4nJ1Rn/F8u9dGS02Q3Y=
 github.com/mitchellh/hashstructure v1.0.0/go.mod h1:QjSHrPWS+BGUVBYkbTZWEnOh3G1DutKwClXU/ABz6AQ=
 github.com/mitchellh/iochan v1.0.0/go.mod h1:JwYml1nuB7xOzsp52dPpHFffvOCDupsG0QubkSMEySY=
 github.com/mitchellh/mapstructure v0.0.0-20160808181253-ca63d7c062ee/go.mod h1:FVVH3fgwuzCH5S8UJGiWEs2h04kUh9fWfEaFds41c1Y=
