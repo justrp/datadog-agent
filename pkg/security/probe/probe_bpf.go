@@ -44,7 +44,7 @@ type Discarder struct {
 }
 
 type onApproverHandler func(probe *Probe, approvers rules.Approvers) (activeApprovers, error)
-type onDiscarderHandler func(rs *rules.RuleSet, event *Event, probe *Probe, discarder Discarder) (activeDiscarders, error)
+type onDiscarderHandler func(rs *rules.RuleSet, event *Event, probe *Probe, discarder Discarder) error
 
 var (
 	allApproversHandlers = make(map[eval.EventType]onApproverHandler)
@@ -61,7 +61,8 @@ type Probe struct {
 	handler           EventHandler
 	resolvers         *Resolvers
 	discarderHandlers map[eval.EventType][]onDiscarderHandler
-	discarders        map[eval.EventType]activeDiscarders
+	pidDiscarders     *lib.Map
+	inodeDiscarders   *lib.Map
 	invalidDiscarders map[eval.Field]map[interface{}]bool
 	approvers         map[eval.EventType]activeApprovers
 	syscallMonitor    *SyscallMonitor
@@ -75,15 +76,17 @@ type Probe struct {
 }
 
 // Map returns a map by its name
-func (p *Probe) Map(name string) *lib.Map {
+func (p *Probe) Map(name string) (*lib.Map, error) {
 	if p.manager == nil {
-		return nil
+		return nil, fmt.Errorf("failed to get map '%s', manager is null", name)
 	}
 	m, ok, err := p.manager.GetMap(name)
-	if !ok || err != nil {
-		return nil
+	if err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, fmt.Errorf("failed to get map '%s'", name)
 	}
-	return m
+	return m, nil
 }
 
 func (p *Probe) detectKernelVersion() {
@@ -141,6 +144,14 @@ func (p *Probe) Init() error {
 
 	if err := p.manager.InitWithOptions(bytecodeReader, p.managerOptions); err != nil {
 		return errors.Wrap(err, "failed to init manager")
+	}
+
+	if p.pidDiscarders, err = p.Map("pid_discarders"); err != nil {
+		return err
+	}
+
+	if p.inodeDiscarders, err = p.Map("inode_discarders"); err != nil {
+		return err
 	}
 
 	if err := p.resolvers.Start(); err != nil {
@@ -252,13 +263,11 @@ var eventZero Event
 
 func (p *Probe) zeroEvent() *Event {
 	*p.event = eventZero
-	p.event.resolvers = p.resolvers
 	return p.event
 }
 
 func (p *Probe) zeroMountEvent() *Event {
 	*p.mountEvent = eventZero
-	p.event.resolvers = p.resolvers
 	return p.mountEvent
 }
 
@@ -381,8 +390,7 @@ func (p *Probe) handleEvent(CPU int, data []byte, perfMap *manager.PerfMap, mana
 		// after the in-kernel discarder cleanup and thus a discarder will be pushed for a deleted file.
 		// If the inode is reused this can be a problem.
 		// Call a user space remove function to ensure the discarder will be removed.
-		// Disabled for now as it is coslty to do this this way.
-		// removeDiscarderInode(p, event.InvalidateDentry.MountID, event.InvalidateDentry.Inode)
+		p.removeDiscarderInode(event.InvalidateDentry.MountID, event.InvalidateDentry.Inode)
 
 		// no need to dispatch
 		return
@@ -489,34 +497,7 @@ func (p *Probe) OnNewDiscarder(rs *rules.RuleSet, event *Event, field eval.Field
 	log.Tracef("New discarder of type %s for field %s", eventType, field)
 
 	if handler, ok := allDiscarderHandlers[eventType]; ok {
-		value, err := event.GetFieldValue(field)
-		if err != nil {
-			return err
-		}
-
-		discarder := Discarder{
-			Field: field,
-		}
-
-		if p.discarders[eventType] == nil {
-			p.discarders[eventType] = make(activeDiscarders)
-		}
-
-		newDiscarders, err := handler(rs, event, p, discarder)
-		if err != nil {
-			return err
-		}
-
-		for key, newDiscarder := range newDiscarders {
-			if newDiscarder != nil && !p.discarders[eventType].HasKey(key) {
-				log.Tracef("Applying discarder %+v, for event %s with the field %s and value %v", newDiscarder, eventType, field, value)
-
-				if err := newDiscarder.Apply(p); err != nil {
-					return err
-				}
-				p.discarders[eventType].Add(newDiscarder)
-			}
-		}
+		return handler(rs, event, p, Discarder{Field: field})
 	}
 
 	return nil
@@ -525,9 +506,9 @@ func (p *Probe) OnNewDiscarder(rs *rules.RuleSet, event *Event, field eval.Field
 // ApplyFilterPolicy is called when a passing policy for an event type is applied
 func (p *Probe) ApplyFilterPolicy(eventType eval.EventType, mode PolicyMode, flags PolicyFlag) error {
 	log.Infof("Setting in-kernel filter policy to `%s` for `%s`", mode, eventType)
-	table := p.Map("filter_policy")
-	if table == nil {
-		return errors.New("unable to find policy table")
+	table, err := p.Map("filter_policy")
+	if err != nil {
+		return errors.Wrap(err, "unable to find policy table")
 	}
 
 	et := parseEvalEventType(eventType)
@@ -615,30 +596,68 @@ func (p *Probe) SelectProbes(rs *rules.RuleSet) error {
 func (p *Probe) FlushDiscarders() error {
 	log.Tracef("Flushing discarders")
 
-	discarderCount := 0
-	for eventType := range p.discarders {
-		discarderCount += len(p.discarders[eventType])
+	flushingMap, err := p.Map("flushing_discarders")
+	if err != nil {
+		return err
 	}
 
+	if err := flushingMap.Put(ebpf.ZeroUint32MapItem, uint32(1)); err != nil {
+		return errors.Wrap(err, "failed to set flush_discarders flag")
+	}
+
+	defer func() {
+		if err := flushingMap.Put(ebpf.ZeroUint32MapItem, uint32(0)); err != nil {
+			log.Errorf("Failed to reset flush_discarders flag: %s", err)
+		}
+	}()
+
+	// Sleeping a bit to avoid races with executing kprobes
+	time.Sleep(time.Second)
+
+	var discardedInodes []inodeDiscarder
+	var inodeParams inodeDiscarderParameters
+	var inode inodeDiscarder
+	for entries := p.inodeDiscarders.Iterate(); entries.Next(&inode, &inodeParams); {
+		discardedInodes = append(discardedInodes, inode)
+	}
+
+	var discardedPids []uint32
+	var pidParams pidDiscarderParameters
+	for pid, entries := uint32(0), p.pidDiscarders.Iterate(); entries.Next(&pid, &pidParams); {
+		discardedPids = append(discardedPids, pid)
+	}
+
+	discarderCount := len(discardedInodes) + len(discardedPids)
 	if discarderCount == 0 {
 		log.Debugf("No discarder found")
 		return nil
 	}
 
-	delay := time.Second * 1 / time.Duration(discarderCount)
-	for eventType := range p.discarders {
-		for _, discarder := range p.discarders[eventType] {
-			log.Tracef("Removing discarder %v for the event %s", discarder, eventType)
-			_ = discarder.Remove(p)
+	flushWindow := time.Second * 3
+	delay := flushWindow / time.Duration(discarderCount)
 
-			discarderCount--
-			if discarderCount > 0 {
-				time.Sleep(delay)
-			}
+	for _, inode := range discardedInodes {
+		if err := p.inodeDiscarders.Delete(&inode); err != nil {
+			log.Tracef("Failed to flush discarder for inode %d: %s", inode, err)
+		}
+
+		discarderCount--
+		if discarderCount > 0 {
+			time.Sleep(delay)
 		}
 	}
 
-	p.discarders = make(map[eval.EventType]activeDiscarders)
+	for _, pid := range discardedPids {
+		if err := p.pidDiscarders.Delete(pid); err != nil {
+			log.Tracef("Failed to flush discarder for pid %d: %s", pid, err)
+		}
+
+		discarderCount--
+		if discarderCount > 0 {
+			time.Sleep(delay)
+		}
+	}
+
 	return nil
 }
 
@@ -688,7 +707,6 @@ func NewProbe(config *config.Config, client *statsd.Client) (*Probe, error) {
 	p := &Probe{
 		config:            config,
 		invalidDiscarders: getInvalidDiscarders(),
-		discarders:        make(map[eval.EventType]activeDiscarders),
 		approvers:         make(map[eval.EventType]activeApprovers),
 		managerOptions:    ebpf.NewDefaultOptions(),
 	}
@@ -715,39 +733,29 @@ func NewProbe(config *config.Config, client *statsd.Client) (*Probe, error) {
 		return nil, err
 	}
 
+	eventZero.resolvers = p.resolvers
+
 	return p, nil
 }
 
 func processDiscarderWrapper(eventType EventType, fnc onDiscarderHandler) onDiscarderHandler {
-	return func(rs *rules.RuleSet, event *Event, probe *Probe, discarder Discarder) (activeDiscarders, error) {
+	return func(rs *rules.RuleSet, event *Event, probe *Probe, discarder Discarder) error {
 		if discarder.Field == "process.filename" {
-			discarders := newActiveKFilters()
-
 			log.Tracef("Apply process.filename discarder for event `%s`, inode: %d", eventType, event.Process.Inode)
 
 			// discard by PID for long running process
-			pidDiscarder, err := discardPID(probe, eventType, event.Process.Pid)
-			if err != nil {
-				return nil, err
-			} else if pidDiscarder != nil {
-				discarders.Add(pidDiscarder)
+			if err := probe.discardPID(eventType, event.Process.Pid); err != nil {
+				return err
 			}
 
-			inodeDiscarder, err := discardInode(probe, eventType, event.Process.MountID, event.Process.Inode)
-			if err != nil {
-				return nil, err
-			} else if pidDiscarder != nil {
-				discarders.Add(inodeDiscarder)
-			}
-
-			return discarders, nil
+			return probe.discardInode(eventType, event.Process.MountID, event.Process.Inode)
 		}
 
 		if fnc != nil {
 			return fnc(rs, event, probe, discarder)
 		}
 
-		return nil, nil
+		return nil
 	}
 }
 
@@ -755,31 +763,31 @@ func processDiscarderWrapper(eventType EventType, fnc onDiscarderHandler) onDisc
 type inodeEventGetter = func(event *Event) (eval.Field, uint32, uint64, uint32, bool)
 
 func filenameDiscarderWrapper(eventType EventType, handler onDiscarderHandler, getter inodeEventGetter) onDiscarderHandler {
-	return func(rs *rules.RuleSet, event *Event, probe *Probe, discarder Discarder) (activeDiscarders, error) {
+	return func(rs *rules.RuleSet, event *Event, probe *Probe, discarder Discarder) error {
 		field, mountID, inode, pathID, isDeleted := getter(event)
 
 		if discarder.Field == field {
 			value, err := event.GetFieldValue(field)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			filename := value.(string)
 
 			if filename == "" {
-				return nil, nil
+				return nil
 			}
 
 			if probe.IsInvalidDiscarder(field, filename) {
-				return nil, nil
+				return nil
 			}
 
-			newDiscarder, err := discardParentInode(probe, rs, eventType, field, filename, mountID, inode, pathID)
-			if newDiscarder == nil && !isDeleted {
+			isDiscarded, err := probe.discardParentInode(rs, eventType, field, filename, mountID, inode, pathID)
+			if !isDiscarded && !isDeleted {
 				if _, ok := err.(*ErrInvalidKeyPath); !ok {
 					log.Tracef("Apply `%s.filename` inode discarder for event `%s`, inode: %d", eventType, eventType, inode)
 
 					// not able to discard the parent then only discard the filename
-					newDiscarder, err = discardInode(probe, eventType, mountID, inode)
+					err = probe.discardInode(eventType, mountID, inode)
 				}
 			} else {
 				log.Tracef("Apply `%s.filename` parent inode discarder for event `%s` with value `%s`", eventType, eventType, filename)
@@ -787,18 +795,16 @@ func filenameDiscarderWrapper(eventType EventType, handler onDiscarderHandler, g
 
 			if err != nil {
 				err = errors.Wrapf(err, "unable to set inode discarders for `%s` for event `%s`", filename, eventType)
-			} else if newDiscarder != nil {
-				return newActiveKFilters(newDiscarder), nil
 			}
 
-			return nil, err
+			return err
 		}
 
 		if handler != nil {
 			return handler(rs, event, probe, discarder)
 		}
 
-		return nil, nil
+		return nil
 	}
 }
 
