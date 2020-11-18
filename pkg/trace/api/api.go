@@ -27,8 +27,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
+	grpc_runtime "github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/tinylib/msgp/msgp"
+	"google.golang.org/grpc"
 
+	"github.com/DataDog/datadog-agent/pkg/api/security"
 	mainconfig "github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/tagger"
 	"github.com/DataDog/datadog-agent/pkg/tagger/collectors"
@@ -37,7 +41,7 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/trace/logutil"
 	"github.com/DataDog/datadog-agent/pkg/trace/metrics"
 	"github.com/DataDog/datadog-agent/pkg/trace/osutil"
-	"github.com/DataDog/datadog-agent/pkg/trace/pb"
+	pb "github.com/DataDog/datadog-agent/pkg/trace/pb"
 	"github.com/DataDog/datadog-agent/pkg/trace/sampler"
 	"github.com/DataDog/datadog-agent/pkg/trace/watchdog"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
@@ -84,6 +88,30 @@ func NewHTTPReceiver(conf *config.AgentConfig, dynConf *sampler.DynamicConfig, o
 
 // Start starts doing the HTTP server and is ready to receive traces
 func (r *HTTPReceiver) Start() {
+
+	addr := fmt.Sprintf("%s:%d", r.conf.ReceiverHost, r.conf.ReceiverPort)
+
+	// grpc stuff
+	opts := []grpc.ServerOption{
+		grpc.StreamInterceptor(grpc_auth.StreamServerInterceptor(security.GrpcAuth)),
+		grpc.UnaryInterceptor(grpc_auth.UnaryServerInterceptor(security.GrpcAuth)),
+	}
+
+	s := grpc.NewServer(opts...)
+	pb.RegisterFlareServer(s, &grpcServer{})
+
+	dopts := []grpc.DialOption{}
+
+	// starting grpc gateway
+	ctx := context.Background()
+	gwmux := grpc_runtime.NewServeMux()
+	err := pb.RegisterFlareHandlerFromEndpoint(
+		ctx, gwmux, addr, dopts)
+	if err != nil {
+		panic(err)
+	}
+
+	// Setup multiplexer
 	mux := http.NewServeMux()
 
 	r.attachDebugHandlers(mux)
@@ -100,6 +128,7 @@ func (r *HTTPReceiver) Start() {
 	mux.HandleFunc("/v0.4/services", r.handleWithVersion(v04, r.handleServices))
 	mux.HandleFunc("/v0.5/traces", r.handleWithVersion(v05, r.handleTraces))
 	mux.Handle("/profiling/v1/input", r.profileProxyHandler())
+	mux.Handle("/", gwmux) // grpc
 
 	timeout := 5 * time.Second
 	if r.conf.ReceiverTimeout > 0 {
@@ -110,10 +139,9 @@ func (r *HTTPReceiver) Start() {
 		ReadTimeout:  timeout,
 		WriteTimeout: timeout,
 		ErrorLog:     stdlog.New(httpLogger, "http.Server: ", 0),
-		Handler:      mux,
+		Handler:      grpcHandlerFunc(s, mux),
 	}
 
-	addr := fmt.Sprintf("%s:%d", r.conf.ReceiverHost, r.conf.ReceiverPort)
 	ln, err := r.listenTCP(addr)
 	if err != nil {
 		killProcess("Error creating tcp listener: %v", err)
@@ -201,6 +229,20 @@ func (r *HTTPReceiver) listenUnix(path string) (net.Listener, error) {
 		return nil, fmt.Errorf("error setting socket permissions: %v", err)
 	}
 	return ln, err
+}
+
+// grpcHandlerFunc returns an http.Handler that delegates to grpcServer on incoming gRPC
+// connections or otherHandler otherwise. Copied from cockroachdb.
+func grpcHandlerFunc(grpcServer *grpc.Server, otherHandler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		// This is a partial recreation of gRPC's internal checks https://github.com/grpc/grpc-go/pull/514/files#diff-95e9a25b738459a2d3030e1e6fa2a718R61
+		if r.ProtoMajor == 2 && strings.Contains(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcServer.ServeHTTP(w, r)
+		} else {
+			otherHandler.ServeHTTP(w, r)
+		}
+	})
 }
 
 // listenTCP creates a new net.Listener on the provided TCP address.
